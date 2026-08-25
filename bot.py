@@ -671,7 +671,7 @@ async def alimentazione(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Sii pratico e concreto, come un nutrizionista che scrive un piano vero."
     )
 
-    risposta = ask_ai(prompt, user_ctx, max_tokens=2000)
+    risposta = ask_ai(prompt, user_ctx, max_tokens=1500)
     risposta = (
         f"PIANO NUTRIZIONALE per {nome}\n"
         f"Target: {target_cal} kcal/giorno {nota_cal}\n\n"
