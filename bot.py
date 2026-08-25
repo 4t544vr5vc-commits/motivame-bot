@@ -231,7 +231,7 @@ def ask_ai(prompt: str, user_context: str = "", max_tokens: int = 1500) -> str:
     messages.append({"role": "user", "content": prompt})
     try:
         response = groq_client.chat.completions.create(
-            model="openai/gpt-oss-20b",
+            model="qwen/qwen3.6-27b",
             messages=messages,
             max_tokens=max_tokens,
             temperature=0.8,
