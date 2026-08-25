@@ -13,11 +13,11 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-from openai import OpenAI
+from groq import Groq
 
 # --- Config ---
 TELEGRAM_TOKEN = os.environ["MOTIVAME_TELEGRAM_TOKEN"]
-OPENAI_KEY = os.environ["MOTIVAME_OPENAI_KEY"]
+GROQ_KEY = os.environ["MOTIVAME_GROQ_KEY"]
 USERS_FILE = Path(__file__).parent / "users.json"
 
 logging.basicConfig(
@@ -26,7 +26,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-openai_client = OpenAI(api_key=OPENAI_KEY)
+groq_client = Groq(api_key=GROQ_KEY)
 
 # --- Conversation states ---
 NOME, OBIETTIVO = range(2)
@@ -72,8 +72,8 @@ def ask_gpt(prompt: str, user_context: str = "") -> str:
         messages.append({"role": "system", "content": f"Contesto utente: {user_context}"})
     messages.append({"role": "user", "content": prompt})
     try:
-        response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
+        response = groq_client.chat.completions.create(
+            model="llama-3.1-8b-instant",
             messages=messages,
             max_tokens=600,
             temperature=0.9,
