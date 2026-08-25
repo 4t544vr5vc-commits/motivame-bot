@@ -619,7 +619,7 @@ async def allenamento(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Scrivi il piano giorno per giorno in modo chiaro e pratico."
     )
 
-    risposta = ask_ai(prompt, user_ctx, max_tokens=2000)
+    risposta = ask_ai(prompt, max_tokens=2000)
     risposta = f"PIANO DI ALLENAMENTO SETTIMANALE per {nome}\n\n{risposta}"
     risposta += disclaimer_medico(user)
 
