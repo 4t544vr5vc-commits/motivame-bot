@@ -80,7 +80,7 @@ def ask_gpt(prompt: str, user_context: str = "") -> str:
         )
         return response.choices[0].message.content
     except Exception as e:
-        logger.error(f"OpenAI error: {e}")
+        logger.error(f"Groq error: {e}", exc_info=True)
         return "⚠️ Il mio cervello ha fatto un cramp! Riprova tra un attimo 💪"
 
 
@@ -90,7 +90,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text(
         "🏃‍♂️ Ciao! Sono *MotivaMe*, il tuo coach che non accetta scuse!\n\n"
         "Dimmi, come ti chiami? 👇",
-        parse_mode="Markdown",
+        ,
     )
     return NOME
 
@@ -136,7 +136,7 @@ async def ricevi_obiettivo(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "🔥 /motivami - Dose di motivazione pura\n"
         "📊 /progressi - Registra i tuoi risultati\n\n"
         "Oppure scrivimi qualsiasi cosa, rispondo come il tuo coach personale! 😤💪",
-        parse_mode="Markdown",
+        ,
     )
     return ConversationHandler.END
 
@@ -163,7 +163,7 @@ async def allenamento(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Sii specifico con i numeri ma anche divertente e motivante."
     )
     risposta = ask_gpt(prompt, json.dumps(user, ensure_ascii=False))
-    await update.message.reply_text(f"🏃‍♂️ *Piano Allenamento per {user['nome']}*\n\n{risposta}", parse_mode="Markdown")
+    await update.message.reply_text(f"🏃‍♂️ *Piano Allenamento per {user['nome']}*\n\n{risposta}", )
 
 
 # --- /alimentazione ---
@@ -183,7 +183,7 @@ async def alimentazione(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Motivalo a seguire il piano!"
     )
     risposta = ask_gpt(prompt, json.dumps(user, ensure_ascii=False))
-    await update.message.reply_text(f"🥗 *Consigli Alimentari per {user['nome']}*\n\n{risposta}", parse_mode="Markdown")
+    await update.message.reply_text(f"🥗 *Consigli Alimentari per {user['nome']}*\n\n{risposta}", )
 
 
 # --- /motivami ---
@@ -233,7 +233,7 @@ async def progressi(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append(line)
         await update.message.reply_text(
             f"📊 *Ultimi progressi di {user['nome']}*\n\n" + "\n".join(lines),
-            parse_mode="Markdown",
+            ,
         )
         return
 
