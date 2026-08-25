@@ -90,7 +90,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text(
         "🏃‍♂️ Ciao! Sono *MotivaMe*, il tuo coach che non accetta scuse!\n\n"
         "Dimmi, come ti chiami? 👇",
-        ,
     )
     return NOME
 
@@ -136,7 +135,6 @@ async def ricevi_obiettivo(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "🔥 /motivami - Dose di motivazione pura\n"
         "📊 /progressi - Registra i tuoi risultati\n\n"
         "Oppure scrivimi qualsiasi cosa, rispondo come il tuo coach personale! 😤💪",
-        ,
     )
     return ConversationHandler.END
 
@@ -233,7 +231,6 @@ async def progressi(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append(line)
         await update.message.reply_text(
             f"📊 *Ultimi progressi di {user['nome']}*\n\n" + "\n".join(lines),
-            ,
         )
         return
 
