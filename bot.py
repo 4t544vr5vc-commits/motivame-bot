@@ -1155,6 +1155,17 @@ async def reset_command(update: Update, context: CallbackContext):
 
 # ===== MAIN =====
 
+
+async def error_handler(update, context):
+    import traceback
+    logger.error(f'Errore: {context.error}')
+    logger.error(traceback.format_exc())
+    if update and update.message:
+        try:
+            await update.message.reply_text('Si e verificato un errore interno. Riprova!')
+        except:
+            pass
+
 def main():
     """Avvia il bot"""
     app = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -1179,6 +1190,7 @@ def main():
 
     # Messaggi di testo (onboarding + flussi interattivi + coach)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_error_handler(error_handler)
 
     # Ripristina sveglie salvate
     restore_sveglie(app)
