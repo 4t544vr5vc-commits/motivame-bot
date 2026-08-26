@@ -7,6 +7,7 @@ import re
 import json
 import logging
 from datetime import datetime, timedelta, time as dtime
+import zoneinfo
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackContext,
@@ -212,7 +213,7 @@ def build_user_context(user_data):
 
 def get_oggi_index():
     """Ritorna l'indice del giorno della settimana (0=lunedi, 6=domenica)"""
-    return datetime.now().weekday()
+    return datetime.now(tz=zoneinfo.ZoneInfo("Europe/Rome")).weekday()
 
 
 def get_piano_giorno(user_data, day_index):
@@ -415,7 +416,7 @@ async def handle_message(update: Update, context: CallbackContext):
         profile["bmr"] = bmr
         profile["tdee"] = tdee
         profile["onboarding_completo"] = True
-        profile["data_registrazione"] = datetime.now().isoformat()
+        profile["data_registrazione"] = datetime.now(tz=zoneinfo.ZoneInfo("Europe/Rome")).isoformat()
         profile["progressi"] = []
 
         # Salva
@@ -466,8 +467,8 @@ async def handle_message(update: Update, context: CallbackContext):
 async def handle_coach_realtime(update: Update, context: CallbackContext, user_data):
     """Coach AI in tempo reale, tiene conto dell'ora e del piano del giorno"""
     text = update.message.text.strip()
-    ora_attuale = datetime.now().strftime("%H:%M")
-    ora_int = datetime.now().hour
+    ora_attuale = datetime.now(tz=zoneinfo.ZoneInfo("Europe/Rome")).strftime("%H:%M")
+    ora_int = datetime.now(tz=zoneinfo.ZoneInfo("Europe/Rome")).hour
     giorno_idx = get_oggi_index()
     giorno_nome = GIORNI_IT_DISPLAY[giorno_idx]
 
@@ -551,7 +552,7 @@ async def piano_settimana_command(update: Update, context: CallbackContext):
     # Salva il piano
     user_data["piano_settimana"] = {
         "contenuto": response,
-        "data_generazione": datetime.now().isoformat()
+        "data_generazione": datetime.now(tz=zoneinfo.ZoneInfo("Europe/Rome")).isoformat()
     }
     save_user(user_id, user_data)
 
@@ -1076,7 +1077,7 @@ async def progressi_con_peso(update: Update, context: CallbackContext):
             user_data["progressi"] = []
 
         user_data["progressi"].append({
-            "data": datetime.now().strftime("%d/%m/%Y"),
+            "data": datetime.now(tz=zoneinfo.ZoneInfo("Europe/Rome")).strftime("%d/%m/%Y"),
             "peso": peso
         })
         user_data["peso"] = peso
