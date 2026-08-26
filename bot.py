@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""MotivaMe v4 - Bot Telegram per fitness e motivazione
-Formato pulito + alimentazione interattiva + aggiorna profilo"""
+"""MotivaMe v5 - Bot Telegram per fitness e motivazione
+Piano settimanale, /oggi, /domani, coach realtime, sveglia motivazionale"""
 
 import os
 import re
 import json
 import logging
-from datetime import datetime
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackContext, filters
+from datetime import datetime, timedelta, time as dtime
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler, CallbackContext,
+    CallbackQueryHandler, filters
+)
 from groq import Groq
 
 # Logging
@@ -30,6 +33,10 @@ PROMPT_SUFFIX = (
     "VIETATO usare: tabelle con |, simboli ---, asterischi **, cancelletti #, tag HTML. "
     "Usa emoji come 🏃 💪 🥗 per separare le sezioni."
 )
+
+# Giorni della settimana in italiano
+GIORNI_IT = ["lunedi", "martedi", "mercoledi", "giovedi", "venerdi", "sabato", "domenica"]
+GIORNI_IT_DISPLAY = ["Lunedi", "Martedi", "Mercoledi", "Giovedi", "Venerdi", "Sabato", "Domenica"]
 
 
 # ===== UTILITY =====
@@ -135,6 +142,32 @@ async def send_long_message(update, text):
             await update.message.reply_text(chunk.strip())
 
 
+async def send_long_message_by_chat(context, chat_id, text):
+    """Invia messaggi lunghi in blocchi da max 3500 caratteri (senza update)"""
+    if len(text) <= 3500:
+        await context.bot.send_message(chat_id=chat_id, text=text)
+        return
+
+    chunks = []
+    while text:
+        if len(text) <= 3500:
+            chunks.append(text)
+            break
+        cut = text[:3500].rfind('\n')
+        if cut < 1000:
+            cut = text[:3500].rfind('. ')
+            if cut < 1000:
+                cut = 3500
+            else:
+                cut += 1
+        chunks.append(text[:cut])
+        text = text[cut:].strip()
+
+    for chunk in chunks:
+        if chunk.strip():
+            await context.bot.send_message(chat_id=chat_id, text=chunk.strip())
+
+
 def calc_bmr_tdee(user_data):
     """Calcola BMR (Harris-Benedict) e TDEE"""
     peso = float(user_data.get("peso", 70))
@@ -175,6 +208,50 @@ def build_user_context(user_data):
         f"Tipo lavoro: {tipo_lavoro}, "
         f"BMR: {user_data.get('bmr','')}, TDEE: {user_data.get('tdee','')}"
     )
+
+
+def get_oggi_index():
+    """Ritorna l'indice del giorno della settimana (0=lunedi, 6=domenica)"""
+    return datetime.now().weekday()
+
+
+def get_piano_giorno(user_data, day_index):
+    """Estrae il piano di un giorno specifico dal piano_settimana salvato"""
+    piano = user_data.get("piano_settimana", {})
+    contenuto = piano.get("contenuto", "")
+    if not contenuto:
+        return None
+
+    # Cerca sezioni per giorno
+    giorno_nome = GIORNI_IT_DISPLAY[day_index]
+    giorno_lower = GIORNI_IT[day_index]
+
+    # Trova la sezione del giorno richiesto
+    lines = contenuto.split('\n')
+    sezione = []
+    trovato = False
+    for line in lines:
+        line_lower = line.lower().strip()
+        # Controlla se questa riga e' l'inizio del giorno cercato
+        if giorno_lower in line_lower and not trovato:
+            trovato = True
+            sezione.append(line)
+            continue
+        # Se siamo nel giorno giusto, aggiungi righe fino al prossimo giorno
+        if trovato:
+            # Controlla se inizia un nuovo giorno
+            is_new_day = False
+            for g in GIORNI_IT:
+                if g != giorno_lower and g in line_lower and len(line_lower) < 80:
+                    is_new_day = True
+                    break
+            if is_new_day:
+                break
+            sezione.append(line)
+
+    if sezione:
+        return '\n'.join(sezione).strip()
+    return None
 
 
 # ===== ONBOARDING =====
@@ -224,7 +301,11 @@ async def start_command(update: Update, context: CallbackContext):
             "Ecco cosa posso fare per te:\n"
             "/allenamento - Piano settimanale di allenamento\n"
             "/alimentazione - Piano nutrizionale personalizzato\n"
+            "/piano_settimana - Piano completo 7 giorni (allenamento + pasti)\n"
+            "/oggi - Cosa fare oggi\n"
+            "/domani - Cosa fare domani\n"
             "/motivami - Messaggio motivazionale\n"
+            "/sveglia - Sveglia motivazionale mattutina\n"
             "/progressi - Registra o visualizza progressi\n"
             "/profilo - Visualizza il tuo profilo\n"
             "/aggiorna - Modifica dati del profilo\n"
@@ -239,7 +320,7 @@ async def start_command(update: Update, context: CallbackContext):
 
 
 async def handle_message(update: Update, context: CallbackContext):
-    """Gestisce tutti i messaggi di testo (onboarding + flussi interattivi)"""
+    """Gestisce tutti i messaggi di testo (onboarding + flussi interattivi + coach realtime)"""
 
     # === FLUSSO ALIMENTAZIONE INTERATTIVA ===
     if context.user_data.get("alimentazione_step") is not None:
@@ -256,10 +337,8 @@ async def handle_message(update: Update, context: CallbackContext):
         user_id = update.effective_user.id
         user_data = get_user(user_id)
         if user_data and user_data.get("onboarding_completo"):
-            await update.message.reply_text(
-                "Non ho capito. Usa uno dei comandi disponibili:\n"
-                "/allenamento /alimentazione /motivami /progressi /profilo /aggiorna /reset"
-            )
+            # === COACH IN TEMPO REALE ===
+            await handle_coach_realtime(update, context, user_data)
         else:
             context.user_data["step"] = 0
             context.user_data["profile"] = {}
@@ -365,7 +444,11 @@ async def handle_message(update: Update, context: CallbackContext):
             "Ecco cosa posso fare per te:\n"
             "/allenamento - Piano settimanale\n"
             "/alimentazione - Piano nutrizionale\n"
+            "/piano_settimana - Piano completo 7 giorni\n"
+            "/oggi - Cosa fare oggi\n"
+            "/domani - Cosa fare domani\n"
             "/motivami - Messaggio motivazionale\n"
+            "/sveglia - Sveglia motivazionale\n"
             "/progressi - Registra progressi\n"
             "/profilo - Il tuo profilo\n"
             "/aggiorna - Modifica profilo\n"
@@ -376,6 +459,320 @@ async def handle_message(update: Update, context: CallbackContext):
         context.user_data["step"] = next_step
         context.user_data["profile"] = profile
         await send_step(update, next_step, profile)
+
+
+# ===== COACH IN TEMPO REALE =====
+
+async def handle_coach_realtime(update: Update, context: CallbackContext, user_data):
+    """Coach AI in tempo reale, tiene conto dell'ora e del piano del giorno"""
+    text = update.message.text.strip()
+    ora_attuale = datetime.now().strftime("%H:%M")
+    ora_int = datetime.now().hour
+    giorno_idx = get_oggi_index()
+    giorno_nome = GIORNI_IT_DISPLAY[giorno_idx]
+
+    ctx = build_user_context(user_data)
+
+    # Cerca piano del giorno se esiste
+    piano_oggi = get_piano_giorno(user_data, giorno_idx)
+    piano_context = ""
+    if piano_oggi:
+        piano_context = f"\n\nPiano di oggi ({giorno_nome}):\n{piano_oggi}"
+
+    # Determina fascia oraria
+    if ora_int < 10:
+        fascia = "mattina presto"
+    elif ora_int < 12:
+        fascia = "tarda mattinata"
+    elif ora_int < 14:
+        fascia = "ora di pranzo"
+    elif ora_int < 17:
+        fascia = "pomeriggio"
+    elif ora_int < 20:
+        fascia = "sera presto"
+    else:
+        fascia = "sera tardi"
+
+    prompt = (
+        f"Sei un coach fitness e nutrizionale italiano. Rispondi al messaggio dell'utente come un coach attento.\n\n"
+        f"Dati utente: {ctx}\n"
+        f"Ora attuale: {ora_attuale} ({fascia})\n"
+        f"Giorno: {giorno_nome}"
+        f"{piano_context}\n\n"
+        f"Messaggio dell'utente: \"{text}\"\n\n"
+        f"Se l'utente parla di fame, cibo, bevande o tentazioni:\n"
+        f"- Considera l'ora attuale per suggerire cosa mangiare\n"
+        f"- Se c'e' un piano, suggerisci coerentemente col piano\n"
+        f"- Indica calorie se menziona cibi/bevande specifiche\n"
+        f"- Suggerisci alternative salutari\n\n"
+        f"Se l'utente chiede altro (motivazione, allenamento, domande), rispondi come coach.\n"
+        f"Sii conciso, pratico e motivante. Max 6-8 frasi."
+        f"{PROMPT_SUFFIX}"
+    )
+
+    response = ask_ai(prompt, max_tokens=600)
+    await send_long_message(update, response)
+
+
+# ===== PIANO SETTIMANALE =====
+
+async def piano_settimana_command(update: Update, context: CallbackContext):
+    """Genera un piano completo per 7 giorni (allenamento + pasti)"""
+    user_id = update.effective_user.id
+    user_data = get_user(user_id)
+
+    if not user_data or not user_data.get("onboarding_completo"):
+        await update.message.reply_text("Devi prima completare il profilo. Usa /start")
+        return
+
+    await update.message.reply_text("Sto generando il tuo piano settimanale completo (allenamento + pasti per 7 giorni)...")
+
+    ctx = build_user_context(user_data)
+    frequenza = user_data.get("frequenza", "3")
+
+    prompt = (
+        f"Sei un coach fitness e nutrizionista italiano. Crea un piano settimanale completo per 7 giorni (da Lunedi a Domenica).\n\n"
+        f"Dati utente: {ctx}\n\n"
+        f"Per OGNI giorno includi:\n"
+        f"- Allenamento del giorno (se previsto, {frequenza} giorni su 7) oppure riposo attivo\n"
+        f"- Colazione\n"
+        f"- Spuntino mattina\n"
+        f"- Pranzo\n"
+        f"- Spuntino pomeriggio\n"
+        f"- Cena\n\n"
+        f"Usa emoji per separare le sezioni di ogni giorno. Inizia ogni giorno con il nome (es: 🗓 Lunedi).\n"
+        f"Adatta tutto a obiettivo, intolleranze e livello di attivita dell'utente.\n"
+        f"Sii specifico con porzioni e esercizi."
+        f"{PROMPT_SUFFIX}"
+    )
+
+    response = ask_ai(prompt, max_tokens=2000)
+
+    # Salva il piano
+    user_data["piano_settimana"] = {
+        "contenuto": response,
+        "data_generazione": datetime.now().isoformat()
+    }
+    save_user(user_id, user_data)
+
+    await send_long_message(update, response)
+    await update.message.reply_text(
+        "Piano salvato! Usa /oggi per vedere cosa fare oggi, /domani per domani."
+    )
+
+
+# ===== OGGI E DOMANI =====
+
+async def oggi_command(update: Update, context: CallbackContext):
+    """Mostra il piano di oggi"""
+    user_id = update.effective_user.id
+    user_data = get_user(user_id)
+
+    if not user_data or not user_data.get("onboarding_completo"):
+        await update.message.reply_text("Devi prima completare il profilo. Usa /start")
+        return
+
+    piano = user_data.get("piano_settimana")
+    if not piano or not piano.get("contenuto"):
+        await update.message.reply_text(
+            "Non hai ancora un piano settimanale!\n"
+            "Usa /piano_settimana per generarne uno."
+        )
+        return
+
+    giorno_idx = get_oggi_index()
+    giorno_nome = GIORNI_IT_DISPLAY[giorno_idx]
+    piano_giorno = get_piano_giorno(user_data, giorno_idx)
+
+    if piano_giorno:
+        header = f"📅 Oggi e' {giorno_nome}!\n\n"
+        await send_long_message(update, header + piano_giorno)
+    else:
+        await update.message.reply_text(
+            f"📅 Oggi e' {giorno_nome}, ma non riesco a trovare il piano di oggi.\n"
+            f"Prova a rigenerare con /piano_settimana"
+        )
+
+
+async def domani_command(update: Update, context: CallbackContext):
+    """Mostra il piano di domani"""
+    user_id = update.effective_user.id
+    user_data = get_user(user_id)
+
+    if not user_data or not user_data.get("onboarding_completo"):
+        await update.message.reply_text("Devi prima completare il profilo. Usa /start")
+        return
+
+    piano = user_data.get("piano_settimana")
+    if not piano or not piano.get("contenuto"):
+        await update.message.reply_text(
+            "Non hai ancora un piano settimanale!\n"
+            "Usa /piano_settimana per generarne uno."
+        )
+        return
+
+    giorno_idx = (get_oggi_index() + 1) % 7
+    giorno_nome = GIORNI_IT_DISPLAY[giorno_idx]
+    piano_giorno = get_piano_giorno(user_data, giorno_idx)
+
+    if piano_giorno:
+        header = f"📅 Domani e' {giorno_nome}!\n\n"
+        await send_long_message(update, header + piano_giorno)
+    else:
+        await update.message.reply_text(
+            f"📅 Domani e' {giorno_nome}, ma non riesco a trovare il piano di domani.\n"
+            f"Prova a rigenerare con /piano_settimana"
+        )
+
+
+# ===== SVEGLIA MOTIVAZIONALE =====
+
+async def sveglia_command(update: Update, context: CallbackContext):
+    """Mostra opzioni per la sveglia motivazionale mattutina"""
+    user_id = update.effective_user.id
+    user_data = get_user(user_id)
+
+    if not user_data or not user_data.get("onboarding_completo"):
+        await update.message.reply_text("Devi prima completare il profilo. Usa /start")
+        return
+
+    orario_attuale = user_data.get("orario_sveglia", "Non impostata")
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⏰ 5:30", callback_data="sveglia_05:30"),
+         InlineKeyboardButton("⏰ 6:00", callback_data="sveglia_06:00")],
+        [InlineKeyboardButton("⏰ 6:30", callback_data="sveglia_06:30"),
+         InlineKeyboardButton("⏰ 7:00", callback_data="sveglia_07:00")],
+        [InlineKeyboardButton("🔕 Disattiva", callback_data="sveglia_off")]
+    ])
+
+    msg = (
+        f"⏰ Sveglia motivazionale\n\n"
+        f"Stato attuale: {orario_attuale}\n\n"
+        f"Ogni mattina riceverai un messaggio personalizzato con motivazione "
+        f"e il programma del giorno.\n\n"
+        f"A che ora vuoi la sveglia?"
+    )
+    await update.message.reply_text(msg, reply_markup=keyboard)
+
+
+async def sveglia_callback(update: Update, context: CallbackContext):
+    """Gestisce la scelta dell'orario sveglia"""
+    query = update.callback_query
+    await query.answer()
+
+    user_id = query.from_user.id
+    user_data = get_user(user_id)
+    if not user_data:
+        await query.edit_message_text("Errore: profilo non trovato. Usa /start")
+        return
+
+    data = query.data
+
+    if data == "sveglia_off":
+        user_data.pop("orario_sveglia", None)
+        save_user(user_id, user_data)
+        # Rimuovi job esistente
+        remove_sveglia_job(context, user_id)
+        await query.edit_message_text("🔕 Sveglia motivazionale disattivata.")
+        return
+
+    # Formato: sveglia_HH:MM
+    orario = data.replace("sveglia_", "")
+    user_data["orario_sveglia"] = orario
+    save_user(user_id, user_data)
+
+    # Imposta il job
+    setup_sveglia_job(context, user_id, orario)
+
+    await query.edit_message_text(
+        f"⏰ Sveglia impostata alle {orario}!\n\n"
+        f"Ogni mattina riceverai motivazione + il programma del giorno."
+    )
+
+
+def remove_sveglia_job(context, user_id):
+    """Rimuovi job sveglia per un utente"""
+    job_name = f"sveglia_{user_id}"
+    current_jobs = context.job_queue.get_jobs_by_name(job_name)
+    for job in current_jobs:
+        job.schedule_removal()
+
+
+def setup_sveglia_job(context, user_id, orario):
+    """Imposta il job sveglia giornaliero"""
+    remove_sveglia_job(context, user_id)
+
+    hour, minute = map(int, orario.split(":"))
+    job_time = dtime(hour=hour, minute=minute)
+    job_name = f"sveglia_{user_id}"
+
+    context.job_queue.run_daily(
+        sveglia_job_callback,
+        time=job_time,
+        name=job_name,
+        data={"user_id": user_id, "chat_id": user_id}
+    )
+    logger.info(f"Sveglia impostata per utente {user_id} alle {orario}")
+
+
+async def sveglia_job_callback(context: CallbackContext):
+    """Callback eseguita dal JobQueue per inviare il messaggio sveglia"""
+    job_data = context.job.data
+    user_id = job_data["user_id"]
+    chat_id = job_data["chat_id"]
+
+    user_data = get_user(user_id)
+    if not user_data:
+        return
+
+    nome = user_data.get("nome", "")
+    obiettivo = user_data.get("obiettivo", "migliorare")
+    giorno_idx = get_oggi_index()
+    giorno_nome = GIORNI_IT_DISPLAY[giorno_idx]
+
+    # Cerca piano di oggi
+    piano_oggi = get_piano_giorno(user_data, giorno_idx)
+    piano_context = ""
+    if piano_oggi:
+        piano_context = f"\nPiano di oggi ({giorno_nome}):\n{piano_oggi}"
+
+    prompt = (
+        f"Sei un coach motivazionale italiano. Scrivi un messaggio motivazionale mattutino per {nome}.\n"
+        f"Obiettivo: {obiettivo}\n"
+        f"Giorno: {giorno_nome}\n"
+        f"{piano_context}\n\n"
+        f"Il messaggio deve:\n"
+        f"- Salutare per nome\n"
+        f"- Motivare con energia\n"
+        f"- Se c'e' un piano, menzionare brevemente cosa prevede oggi\n"
+        f"- Essere breve e potente (max 5-6 frasi)\n"
+        f"- Usare emoji per dare energia"
+        f"{PROMPT_SUFFIX}"
+    )
+
+    response = ask_ai(prompt, max_tokens=400)
+    try:
+        await send_long_message_by_chat(context, chat_id, response)
+    except Exception as e:
+        logger.error(f"Errore invio sveglia a {user_id}: {e}")
+
+
+def restore_sveglie(app):
+    """Ripristina le sveglie salvate all'avvio del bot"""
+    users = load_users()
+    for user_id, user_data in users.items():
+        orario = user_data.get("orario_sveglia")
+        if orario:
+            hour, minute = map(int, orario.split(":"))
+            job_time = dtime(hour=hour, minute=minute)
+            job_name = f"sveglia_{user_id}"
+            app.job_queue.run_daily(
+                sveglia_job_callback,
+                time=job_time,
+                name=job_name,
+                data={"user_id": int(user_id), "chat_id": int(user_id)}
+            )
+            logger.info(f"Sveglia ripristinata per {user_id} alle {orario}")
 
 
 # ===== ALIMENTAZIONE INTERATTIVA =====
@@ -719,7 +1116,8 @@ async def profilo_command(update: Update, context: CallbackContext):
         f"Esperienza corsa: {user_data.get('esperienza_corsa', '')}\n"
         f"Tipo lavoro: {user_data.get('tipo_lavoro', 'non specificato')}\n"
         f"BMR: {int(user_data.get('bmr', 0))} kcal/giorno\n"
-        f"TDEE: {int(user_data.get('tdee', 0))} kcal/giorno"
+        f"TDEE: {int(user_data.get('tdee', 0))} kcal/giorno\n"
+        f"Sveglia: {user_data.get('orario_sveglia', 'Non impostata')}"
     )
     await update.message.reply_text(msg)
 
@@ -730,6 +1128,9 @@ async def reset_command(update: Update, context: CallbackContext):
     users = load_users()
     users.pop(str(user_id), None)
     save_users(users)
+
+    # Rimuovi sveglia
+    remove_sveglia_job(context, user_id)
 
     # Pulisci user_data
     context.user_data.clear()
@@ -750,17 +1151,27 @@ def main():
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("allenamento", allenamento_command))
     app.add_handler(CommandHandler("alimentazione", alimentazione_command))
+    app.add_handler(CommandHandler("piano_settimana", piano_settimana_command))
+    app.add_handler(CommandHandler("oggi", oggi_command))
+    app.add_handler(CommandHandler("domani", domani_command))
     app.add_handler(CommandHandler("motivami", motivami_command))
+    app.add_handler(CommandHandler("sveglia", sveglia_command))
     app.add_handler(CommandHandler("progressi", progressi_con_peso, has_args=True))
     app.add_handler(CommandHandler("progressi", progressi_command, has_args=False))
     app.add_handler(CommandHandler("profilo", profilo_command))
     app.add_handler(CommandHandler("aggiorna", aggiorna_command))
     app.add_handler(CommandHandler("reset", reset_command))
 
-    # Messaggi di testo (onboarding + flussi interattivi)
+    # Callback per bottoni inline (sveglia)
+    app.add_handler(CallbackQueryHandler(sveglia_callback, pattern=r"^sveglia_"))
+
+    # Messaggi di testo (onboarding + flussi interattivi + coach)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info("Bot MotivaMe v4 avviato!")
+    # Ripristina sveglie salvate
+    restore_sveglie(app)
+
+    logger.info("Bot MotivaMe v5 avviato!")
     app.run_polling(drop_pending_updates=True)
 
 
