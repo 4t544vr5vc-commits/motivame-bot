@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""MotivaMe v5 - Bot Telegram per fitness e motivazione
-Piano settimanale, /oggi, /domani, coach realtime, sveglia motivazionale"""
+"""MotivaMe v5.1 - Bot Telegram per fitness e motivazione
+Piano settimanale, /oggi, /domani, coach realtime, sveglia motivazionale
+Persistenza dati su Redis (compatibile Railway)"""
 
 import os
 import re
@@ -8,6 +9,7 @@ import json
 import logging
 from datetime import datetime, timedelta, time as dtime
 import zoneinfo
+import redis
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackContext,
@@ -23,7 +25,6 @@ logger = logging.getLogger(__name__)
 TELEGRAM_TOKEN = os.environ["MOTIVAME_TELEGRAM_TOKEN"]
 GROQ_KEY = os.environ["MOTIVAME_GROQ_KEY"]
 AI_MODEL = "groq/compound"
-USERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.json")
 
 # Groq client
 groq_client = Groq(api_key=GROQ_KEY)
@@ -40,34 +41,41 @@ GIORNI_IT = ["lunedi", "martedi", "mercoledi", "giovedi", "venerdi", "sabato", "
 GIORNI_IT_DISPLAY = ["Lunedi", "Martedi", "Mercoledi", "Giovedi", "Venerdi", "Sabato", "Domenica"]
 
 
-# ===== UTILITY =====
+# ===== REDIS PERSISTENCE =====
 
-def load_users():
-    """Carica il database utenti da JSON"""
-    if os.path.exists(USERS_FILE):
-        with open(USERS_FILE, "r") as f:
-            return json.load(f)
-    return {}
-
-
-def save_users(users):
-    """Salva il database utenti su JSON"""
-    with open(USERS_FILE, "w") as f:
-        json.dump(users, f, indent=2, ensure_ascii=False)
+def get_redis():
+    """Connessione a Redis (Railway fornisce REDIS_URL automaticamente)"""
+    url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+    return redis.from_url(url, decode_responses=True)
 
 
 def get_user(user_id):
-    """Ottieni dati utente"""
-    users = load_users()
-    return users.get(str(user_id))
+    """Ottieni dati utente da Redis"""
+    r = get_redis()
+    data = r.get(f"user:{user_id}")
+    return json.loads(data) if data else None
 
 
 def save_user(user_id, data):
-    """Salva dati utente"""
-    users = load_users()
-    users[str(user_id)] = data
-    save_users(users)
+    """Salva dati utente su Redis"""
+    r = get_redis()
+    r.set(f"user:{user_id}", json.dumps(data, ensure_ascii=False))
 
+
+def delete_user(user_id):
+    """Elimina dati utente da Redis"""
+    r = get_redis()
+    r.delete(f"user:{user_id}")
+
+
+def get_all_user_ids():
+    """Ottieni tutti gli user_id salvati su Redis"""
+    r = get_redis()
+    keys = r.keys("user:*")
+    return [k.replace("user:", "") for k in keys]
+
+
+# ===== UTILITY =====
 
 def pulisci_testo(text):
     """Rimuove formattazione markdown/tabelle dal testo AI"""
@@ -759,21 +767,26 @@ async def sveglia_job_callback(context: CallbackContext):
 
 
 def restore_sveglie(app):
-    """Ripristina le sveglie salvate all'avvio del bot"""
-    users = load_users()
-    for user_id, user_data in users.items():
-        orario = user_data.get("orario_sveglia")
-        if orario:
-            hour, minute = map(int, orario.split(":"))
-            job_time = dtime(hour=hour, minute=minute)
-            job_name = f"sveglia_{user_id}"
-            app.job_queue.run_daily(
-                sveglia_job_callback,
-                time=job_time,
-                name=job_name,
-                data={"user_id": int(user_id), "chat_id": int(user_id)}
-            )
-            logger.info(f"Sveglia ripristinata per {user_id} alle {orario}")
+    """Ripristina le sveglie salvate all'avvio del bot (da Redis)"""
+    try:
+        user_ids = get_all_user_ids()
+        for user_id in user_ids:
+            user_data = get_user(user_id)
+            if user_data:
+                orario = user_data.get("orario_sveglia")
+                if orario:
+                    hour, minute = map(int, orario.split(":"))
+                    job_time = dtime(hour=hour, minute=minute)
+                    job_name = f"sveglia_{user_id}"
+                    app.job_queue.run_daily(
+                        sveglia_job_callback,
+                        time=job_time,
+                        name=job_name,
+                        data={"user_id": int(user_id), "chat_id": int(user_id)}
+                    )
+                    logger.info(f"Sveglia ripristinata per {user_id} alle {orario}")
+    except Exception as e:
+        logger.warning(f"Impossibile ripristinare sveglie da Redis: {e}")
 
 
 # ===== ALIMENTAZIONE INTERATTIVA =====
@@ -1126,9 +1139,7 @@ async def profilo_command(update: Update, context: CallbackContext):
 async def reset_command(update: Update, context: CallbackContext):
     """Cancella profilo e ricomincia"""
     user_id = update.effective_user.id
-    users = load_users()
-    users.pop(str(user_id), None)
-    save_users(users)
+    delete_user(user_id)
 
     # Rimuovi sveglia
     remove_sveglia_job(context, user_id)
@@ -1172,7 +1183,7 @@ def main():
     # Ripristina sveglie salvate
     restore_sveglie(app)
 
-    logger.info("Bot MotivaMe v5 avviato!")
+    logger.info("Bot MotivaMe v5.1 avviato! (Redis persistence)")
     app.run_polling(drop_pending_updates=True)
 
 
