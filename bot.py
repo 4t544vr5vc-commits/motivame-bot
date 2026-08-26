@@ -161,7 +161,7 @@ ONBOARDING_STEPS = {
     2: {"msg": "Qual e' il tuo sesso?", "key": "sesso", "buttons": [["Maschio", "Femmina"]]},
     3: {"msg": "Quanto pesi? (in kg)", "key": "peso"},
     4: {"msg": "Quanto sei alto/a? (in cm)", "key": "altezza"},
-    5: {"msg": "Qual e' il tuo obiettivo principale?", "key": "obiettivo", "buttons": [["Perdere peso", "Correre"], ["Tonificarmi", "Mangiare meglio"]]},
+    5: {"msg": "Quali sono i tuoi obiettivi? (puoi scrivere piu obiettivi, es: Perdere peso e correre)", "key": "obiettivo", "buttons": [["Perdere peso", "Correre"], ["Tonificarmi", "Mangiare meglio"], ["Perdere peso e correre", "Tutto"]]},
     6: {"msg": "Come descriveresti il tuo livello di attivita' fisica?", "key": "attivita", "buttons": [["Sedentario", "Poco attivo"], ["Attivo", "Molto attivo"]]},
     7: {"msg": "Hai patologie o condizioni mediche di cui devo tenere conto? (scrivi 'nessuna' se non ne hai)", "key": "patologie"},
     8: {"msg": "Hai intolleranze o allergie alimentari? (scrivi 'nessuna' se non ne hai)", "key": "intolleranze"},
@@ -278,9 +278,7 @@ async def handle_message(update: Update, context: CallbackContext):
     elif key == "sesso" and text not in ["Maschio", "Femmina"]:
         await update.message.reply_text("Per favore scegli Maschio o Femmina.")
         return
-    elif key == "obiettivo" and text not in ["Perdere peso", "Correre", "Tonificarmi", "Mangiare meglio"]:
-        await update.message.reply_text("Per favore scegli una delle opzioni disponibili.")
-        return
+    # obiettivo: accetta qualsiasi testo
     elif key == "attivita" and text not in ["Sedentario", "Poco attivo", "Attivo", "Molto attivo"]:
         await update.message.reply_text("Per favore scegli una delle opzioni disponibili.")
         return
